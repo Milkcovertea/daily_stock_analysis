@@ -39,6 +39,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
+import requests
+
 # 设置 UTF-8 输出编码（解决 Windows 命令行乱码问题）
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -116,7 +118,12 @@ class StockScreener:
             logger.warning("东方财富接口失败，尝试新浪财经接口作为备用...")
             df = self._try_fetch_from_sina(max_retries, retry_delay)
 
-        # 如果两个接口都失败，返回 None
+        # 如果批量API都失败，但有基础股票池，使用腾讯API逐个获取（GitHub Actions专用）
+        if (df is None or len(df) == 0) and self.base_stock_list:
+            logger.warning("批量API失败，使用腾讯API逐个获取基础股票池数据...")
+            df = self._try_fetch_from_tencent_batch(self.base_stock_list, max_retries, retry_delay)
+
+        # 如果所有方法都失败，返回 None
         if df is None or len(df) == 0:
             logger.error("所有数据源均失败，将触发Fallback机制")
             return None
@@ -192,6 +199,127 @@ class StockScreener:
                     return None
 
         return None
+
+    def _try_fetch_from_tencent_batch(self, stock_codes: list, max_retries: int, retry_delay: int) -> Optional[pd.DataFrame]:
+        """
+        使用腾讯API批量获取基础股票池的实时行情（GitHub Actions环境专用）
+
+        Args:
+            stock_codes: 股票代码列表
+            max_retries: 重试次数
+            retry_delay: 重试间隔
+
+        Returns:
+            DataFrame或None
+        """
+        if not stock_codes:
+            return None
+
+        import time
+
+        logger.info(f"[腾讯API] 尝试获取 {len(stock_codes)} 只股票的实时行情...")
+
+        all_data = []
+        failed_count = 0
+
+        for i, code in enumerate(stock_codes):
+            symbol = self._to_tencent_symbol(code)
+            if not symbol:
+                logger.warning(f"[腾讯API] 不支持的代码：{code}")
+                failed_count += 1
+                continue
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    url = f"http://qt.gtimg.cn/q={symbol}"
+                    response = requests.get(url, timeout=10)
+
+                    if response.status_code == 200 and not response.text.startswith("bad"):
+                        # 解析腾讯格式：v_sh600000="51~浦发银行~600000~8.92~..."
+                        data = self._parse_tencent_quote(response.text, code)
+                        if data:
+                            all_data.append(data)
+                            break
+
+                    # 失败重试
+                    if attempt < max_retries:
+                        logger.warning(f"[腾讯API] 获取{code}失败，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error(f"[腾讯API] 获取{code}最终失败")
+                        failed_count += 1
+
+                except Exception as e:
+                    logger.warning(f"[腾讯API] 获取{code}异常：{e}")
+                    if attempt < max_retries:
+                        time.sleep(retry_delay)
+                    else:
+                        failed_count += 1
+
+        if not all_data:
+            logger.error("[腾讯API] 所有股票获取失败")
+            return None
+
+        df = pd.DataFrame(all_data)
+        logger.info(f"[腾讯API] 成功获取 {len(all_data)}/{len(stock_codes)} 只股票数据，失败 {failed_count} 只")
+        return self._normalize_dataframe(df)
+
+    def _to_tencent_symbol(self, code: str) -> str:
+        """转换为腾讯股票代码格式"""
+        code = code.strip().zfill(6)
+        if code.startswith(('6', '5', '9')):
+            return f"sh{code}"
+        elif code.startswith(('0', '3')):
+            return f"sz{code}"
+        elif code.startswith(('4', '8')):  # 北交所
+            return f"bj{code}"
+        return ""
+
+    def _parse_tencent_quote(self, text: str, code: str) -> Optional[dict]:
+        """
+        解析腾讯行情数据
+
+        格式：v_sh600000="51~浦发银行~600000~8.92~8.69~8.68~793762~..."
+        字段：0~未知~代码~现价~昨收~今开~成交量~内盘~外盘~...
+        """
+        try:
+            # 提取引号内的内容
+            if '=' not in text or '"' not in text:
+                return None
+
+            content = text.split('=', 1)[1].strip().strip('"').strip('"')
+            parts = content.split('~')
+
+            if len(parts) < 10:
+                return None
+
+            # 关键字段索引（根据腾讯实际格式调整）
+            # 0:未知, 1:名称, 2:代码, 3:现价, 4:昨收, 5:今开, 6:成交量(手)
+            name = parts[1] if len(parts) > 1 else ""
+            current_price = float(parts[3]) if len(parts) > 3 and parts[3] else 0.0
+            prev_close = float(parts[4]) if len(parts) > 4 and parts[4] else 0.0
+            open_price = float(parts[5]) if len(parts) > 5 and parts[5] else 0.0
+            volume = int(parts[6]) * 100 if len(parts) > 6 and parts[6] else 0  # 手->股
+
+            # 计算涨跌幅
+            pct_chg = ((current_price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+
+            # 估算成交额（成交量 * 均价，近似值）
+            amount = volume * current_price if current_price > 0 else 0.0
+
+            return {
+                'code': code.zfill(6),
+                'name': name,
+                'close': current_price,
+                'open': open_price,
+                'pct_chg': pct_chg,
+                'volume': volume,
+                'amount': amount,
+                'source': 'tencent'
+            }
+        except Exception as e:
+            logger.warning(f"[腾讯API] 解析{code}失败：{e}")
+            return None
 
     def _normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """标准化 DataFrame 列名"""
