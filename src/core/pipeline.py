@@ -3182,15 +3182,18 @@ class StockAnalysisPipeline:
                 logger.info(f"当前文件摘要配置：NOTIFICATION_FILE_WITH_SUMMARY={file_with_summary}")
 
                 if push_mode == 'file':
-                    # 文件推送模式：保存报告到文件，然后发送文件+简短摘要
+                    # 文件推送模式：保存完整报告到文件，然后发送文件+简短摘要
                     logger.info("使用文件推送模式...")
-                    filepath = self.notifier.save_report_to_file(report)
-                    logger.info(f"报告已保存到文件：{filepath}")
+
+                    # 文件推送模式下，使用完整报告（包含所有股票的详细分析）
+                    full_report = self._generate_aggregate_report(results, ReportType.FULL)
+                    filepath = self.notifier.save_report_to_file(full_report)
+                    logger.info(f"完整报告已保存到文件：{filepath}")
 
                     # 生成摘要（如果配置了）
                     caption = None
                     if file_with_summary:
-                        caption = self.notifier._generate_file_summary(report)
+                        caption = self.notifier._generate_file_summary(full_report)
                         logger.info(f"生成文件推送摘要：{caption[:100]}...")
 
                     # 调用文件推送
