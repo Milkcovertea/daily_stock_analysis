@@ -500,6 +500,10 @@ class StockScreener:
         # 6. 输出结果
         if not dry_run:
             self._print_results(report)
+        else:
+            # dry-run模式下也输出股票列表，方便GitHub Actions捕获
+            print(f"\nSTOCK_LIST_OUTPUT={','.join(report['stock_codes'])}")
+            print(f"最终股票列表（逗号分隔）：{','.join(report['stock_codes'])}")
 
         return final_stocks, report
 
