@@ -416,16 +416,6 @@ jobs:
           # 启用自动筛选（设为 true 启用，留空或 false 则使用手动配置的 STOCK_LIST）
           AUTO_SCREEN_ENABLED: ${{ vars.AUTO_SCREEN_ENABLED || secrets.AUTO_SCREEN_ENABLED || 'false' }}
 
-          # ==========================================
-          # 文件推送配置（可选）
-          # ==========================================
-          # 推送模式：text（文本）或 file（文件）
-          NOTIFICATION_PUSH_MODE: ${{ vars.NOTIFICATION_PUSH_MODE || secrets.NOTIFICATION_PUSH_MODE || 'text' }}
-          # 文件推送时是否发送简短摘要
-          NOTIFICATION_FILE_WITH_SUMMARY: ${{ vars.NOTIFICATION_FILE_WITH_SUMMARY || secrets.NOTIFICATION_FILE_WITH_SUMMARY || 'true' }}
-          # 自定义摘要模板（可选）
-          NOTIFICATION_FILE_SUMMARY_TEMPLATE: ${{ vars.NOTIFICATION_FILE_SUMMARY_TEMPLATE || secrets.NOTIFICATION_FILE_SUMMARY_TEMPLATE }}
-
         run: |
           # 解析基础股票池配置
           if [ -n "${BASE_STOCK_LIST:-}" ]; then

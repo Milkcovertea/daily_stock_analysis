@@ -942,14 +942,6 @@ class Config:
     notification_daily_digest_enabled: bool = False
 
     # === 文件推送功能（Issue #XXX）===
-    # 推送模式：text（文本）或 file（文件）
-    # 默认：text（保持向后兼容）
-    notification_push_mode: str = "text"
-    # 文件推送时是否同时发送简短摘要
-    notification_file_with_summary: bool = True
-    # 自定义摘要消息模板（支持Jinja2）
-    notification_file_summary_template: str = ""
-
     # 单股推送模式：每分析完一只股票立即推送，而不是汇总后推送
     single_stock_notify: bool = False
 
@@ -1874,13 +1866,6 @@ class Config:
                 os.getenv('NOTIFICATION_DAILY_DIGEST_ENABLED'),
                 default=False,
             ),
-            # 文件推送配置
-            notification_push_mode=os.getenv('NOTIFICATION_PUSH_MODE', 'text').strip().lower(),
-            notification_file_with_summary=parse_env_bool(
-                os.getenv('NOTIFICATION_FILE_WITH_SUMMARY'),
-                default=True,
-            ),
-            notification_file_summary_template=(os.getenv('NOTIFICATION_FILE_SUMMARY_TEMPLATE') or '').strip(),
             single_stock_notify=os.getenv('SINGLE_STOCK_NOTIFY', 'false').lower() == 'true',
             report_type=cls._parse_report_type(os.getenv('REPORT_TYPE', 'simple')),
             report_language=cls._parse_report_language(report_language_raw),
