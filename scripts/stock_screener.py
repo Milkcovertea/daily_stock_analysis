@@ -124,6 +124,31 @@ class StockScreener:
                         return None
 
                 logger.info(f"成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
+
+                # 标准化列名（akshare 返回的列名可能变化）
+                # 确保有我们需要的字段：代码、名称、收盘价、成交额
+                required_columns = {
+                    '代码': 'code',
+                    '名称': 'name',
+                    '最新价': 'close',
+                    '成交额': 'amount',
+                    '涨跌幅': 'pct_chg',
+                    '涨速': 'change_rate',
+                    '换手': 'turnover',
+                    '量比': 'volume_ratio',
+                    '振幅': 'amplitude',
+                    '总市值': 'market_cap',
+                    '市盈率-动态': 'pe_ratio'
+                }
+
+                # 重命名列
+                for cn_name, en_name in required_columns.items():
+                    if cn_name in df.columns:
+                        df[en_name] = df[cn_name]
+
+                # 确保代码是字符串格式
+                df['code'] = df['code'].astype(str).str.zfill(6)
+
                 return df
 
             except Exception as e:
@@ -138,36 +163,6 @@ class StockScreener:
                     return None
 
         return None
-
-            # 标准化列名（akshare 返回的列名可能变化）
-            # 确保有我们需要的字段：代码、名称、收盘价、成交额
-            required_columns = {
-                '代码': 'code',
-                '名称': 'name',
-                '最新价': 'close',
-                '成交额': 'amount',
-                '涨跌幅': 'pct_chg',
-                '涨速': 'change_rate',
-                '换手': 'turnover',
-                '量比': 'volume_ratio',
-                '振幅': 'amplitude',
-                '总市值': 'market_cap',
-                '市盈率-动态': 'pe_ratio'
-            }
-
-            # 重命名列
-            for cn_name, en_name in required_columns.items():
-                if cn_name in df.columns:
-                    df[en_name] = df[cn_name]
-
-            # 确保代码是字符串格式
-            df['code'] = df['code'].astype(str).str.zfill(6)
-
-            return df
-
-        except Exception as e:
-            logger.error(f"获取 A 股列表失败：{e}", exc_info=True)
-            return None
 
     def filter_stocks(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
         """
@@ -564,9 +559,8 @@ def main():
                 f.write(','.join(report['stock_codes']))
             logger.info(f"股票代码列表已保存到：{stock_codes_file}")
 
-            # 输出到 stdout（方便 GitHub Actions 捕获）
-            if verbose:
-                print(f"\nSTOCK_LIST_OUTPUT={','.join(report['stock_codes'])}")
+            # 输出到 stdout（方便 GitHub Actions 捕获，不受 verbose 模式影响）
+            print(f"\nSTOCK_LIST_OUTPUT={','.join(report['stock_codes'])}")
 
     logger.info("筛选完成！")
     return 0

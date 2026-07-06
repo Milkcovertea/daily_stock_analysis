@@ -551,8 +551,8 @@ jobs:
             echo ""
 
             # 从输出中提取最终股票列表
-            # 方法1: 查找"最终股票列表（逗号分隔）："行
-            STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "💾 最终股票列表（逗号分隔）：" | cut -d'：' -f2)
+            # 方法1: 查找"最终股票列表（逗号分隔）："行（兼容有无 emoji）
+            STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "最终股票列表（逗号分隔）" | cut -d':' -f2)
 
             # 方法2: 如果方法1失败，查找"STOCK_LIST_OUTPUT="
             if [ -z "$STOCK_LIST_LINE" ]; then
@@ -561,7 +561,7 @@ jobs:
 
             # 方法3: 如果方法2也失败，尝试从"筛选结果："行提取
             if [ -z "$STOCK_LIST_LINE" ]; then
-              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "📊 筛选结果：" | cut -d'：' -f2)
+              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "筛选结果" | cut -d':' -f2)
             fi
 
             # 清理空格
