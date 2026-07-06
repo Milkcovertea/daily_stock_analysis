@@ -84,14 +84,18 @@ env:
 ### 文件推送（新模式）
 
 **推送消息**：
-```
-📊 2026-07-06 股票分析报告
+```text
+📊 2026-07-06 股票分析已完成
 
 共分析 7 只股票
 🟢 买入: 2  🟡 观望: 4  🔴 卖出: 1
 
-[附件] report_20260706.md (15.2 KB)
+请查看附件 report.md
 ```
+
+**Discord 定时主流程附件**：
+- `report.md`：包含全部股票分析结果
+- `markets.md`：包含大盘复盘信息
 
 **附件文件内容**（完整Markdown报告）：
 ```markdown
@@ -143,10 +147,15 @@ env:
 每次分析完成后，系统会自动生成Markdown文件：
 
 ```python
-# 文件名格式：report_YYYYMMDD.md
+# Discord 定时主流程固定产出文件名
 filepath = notifier.save_report_to_file(
     content=full_report,
-    filename=f"report_{date_str}.md"
+    filename="report.md"
+)
+
+market_filepath = notifier.save_report_to_file(
+    content=market_report,
+    filename="markets.md"
 )
 ```
 
@@ -156,16 +165,11 @@ filepath = notifier.save_report_to_file(
 
 ```python
 if config.notification_push_mode == "file":
-    # 文件推送模式
-    success = notifier.send_file(
+    # 文件推送模式：先发短摘要，再发送真实附件
+    notifier.send(summary_message, route_type="report", force_text_mode=True)
+    notifier.send_file(
         filepath=filepath,
-        caption=summary_message,  # 可选的简短摘要
-        route_type="report"
-    )
-else:
-    # 传统文本推送
-    success = notifier.send(
-        content=full_report,
+        caption=None,
         route_type="report"
     )
 ```

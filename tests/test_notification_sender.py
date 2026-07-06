@@ -223,6 +223,25 @@ class TestDiscordSender(unittest.TestCase):
         self.assertGreater(mock_post.call_count, 1)
         payload_lengths = [len(call.kwargs["json"]["content"]) for call in mock_post.call_args_list]
         self.assertTrue(all(length <= 2000 for length in payload_lengths))
+    @mock.patch("src.notification_sender.discord_sender.requests.post")
+    def test_send_file_uses_source_filename_for_webhook_upload(self, mock_post):
+        mock_post.return_value = _response(200)
+        cfg = _config(discord_webhook_url="https://discord.com/webhook/1")
+        sender = DiscordSender(cfg)
+
+        tmp_path = os.path.join(os.path.dirname(__file__), "tmp_markets_test.md")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                handle.write("# markets\n")
+
+            result = sender.send_file(tmp_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        self.assertTrue(result)
+        files = mock_post.call_args.kwargs["files"]
+        self.assertEqual(files["file"][0], "tmp_markets_test.md")
 
 
 class TestWechatSender(unittest.TestCase):

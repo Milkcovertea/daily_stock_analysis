@@ -1807,6 +1807,112 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertIn("## 完整大盘复盘", notifier_message)
         self.assertNotIn("大盘退潮，高风险，建议观望。", notifier_message)
 
+    def test_run_full_analysis_merge_file_mode_sends_summary_and_dual_attachments(self) -> None:
+        args = self._make_args()
+        target_date = date(2026, 3, 26)
+        config = self._make_config(
+            trading_day_check_enabled=False,
+            market_review_enabled=True,
+            daily_market_context_enabled=True,
+            single_stock_notify=False,
+            merge_email_notification=True,
+            notification_push_mode="file",
+            notification_file_with_summary=True,
+            analysis_delay=0,
+            database_path=str(Path(self.temp_dir.name) / "stock_analysis.db"),
+            report_type="simple",
+        )
+        result_item = SimpleNamespace(code="600519", sentiment_score=80)
+        pipeline = MagicMock()
+        pipeline.run.return_value = [result_item]
+        pipeline.notifier = MagicMock(
+            is_available=MagicMock(return_value=True),
+            generate_aggregate_report=MagicMock(return_value="full stock report"),
+            save_report_to_file=MagicMock(side_effect=["/tmp/report.md", "/tmp/markets.md"]),
+            _generate_file_summary=MagicMock(return_value="summary text"),
+            send=MagicMock(return_value=True),
+            send_file=MagicMock(return_value=True),
+        )
+        pipeline_kwargs = {}
+
+        def build_pipeline(*args, **kwargs):
+            pipeline_kwargs.update(kwargs)
+            return pipeline
+
+        with patch.object(main, "_refresh_stock_index_cache_for_analysis") as refresh, \
+             patch("main._compute_trading_day_filter", return_value=([], "cn", False)), \
+             patch("main._resolve_daily_market_context_target_date", return_value=target_date), \
+             patch("src.core.pipeline.StockAnalysisPipeline", side_effect=build_pipeline), \
+             patch(
+                "main._prime_daily_market_context",
+                return_value=(
+                    "大盘退潮，高风险，建议观望。",
+                    "## 完整大盘复盘\n市场结构偏弱，建议保守。",
+                ),
+             ) as prime_context, \
+             patch("main._run_market_review_with_shared_lock") as run_with_lock, \
+             patch("src.core.market_review.run_market_review") as run_market_review:
+            main.run_full_analysis(config, args, [])
+
+        self.assertTrue(pipeline_kwargs["daily_market_context_allow_generate"])
+        run_with_lock.assert_not_called()
+        run_market_review.assert_not_called()
+        refresh.assert_called_once_with(config)
+        pipeline.run.assert_called_once_with(
+            stock_codes=[],
+            dry_run=False,
+            send_notification=True,
+            merge_notification=True,
+            current_time=unittest.mock.ANY,
+        )
+        prime_context.assert_has_calls(
+            [
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn",
+                    no_market_review=False,
+                    allow_generate=False,
+                    target_date=target_date,
+                    return_full_report=False,
+                ),
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn",
+                    no_market_review=False,
+                    allow_generate=False,
+                    target_date=target_date,
+                    return_full_report=True,
+                    require_current_query_match=True,
+                ),
+            ]
+        )
+        pipeline.notifier.generate_aggregate_report.assert_called_once_with(
+            [result_item],
+            main.ReportType.FULL,
+        )
+        self.assertEqual(
+            [call.args for call in pipeline.notifier.save_report_to_file.call_args_list],
+            [
+                ("full stock report", "report.md"),
+                ("# 🎯 大盘复盘\n\n## 完整大盘复盘\n市场结构偏弱，建议保守。", "markets.md"),
+            ],
+        )
+        pipeline.notifier.send.assert_called_once_with(
+            "summary text",
+            email_send_to_all=True,
+            route_type="report",
+            force_text_mode=True,
+        )
+        self.assertEqual(
+            [call.kwargs for call in pipeline.notifier.send_file.call_args_list],
+            [
+                {"filepath": "/tmp/report.md", "caption": None, "route_type": "report"},
+                {"filepath": "/tmp/markets.md", "caption": None, "route_type": "report"},
+            ],
+        )
+
     def test_run_market_review_with_shared_lock_forwards_request_config(self) -> None:
         config = self._make_config(
             trading_day_check_enabled=False,

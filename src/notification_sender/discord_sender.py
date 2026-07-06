@@ -313,13 +313,13 @@ class DiscordSender:
                 logger.error(f"文件路径绝对路径：{os.path.abspath(file_path)}")
                 return False
 
+            filename = os.path.basename(file_path) or "report.md"
+
             # 读取文件
             with open(file_path, 'rb') as f:
                 file_bytes = f.read()
 
             logger.info(f"Discord 文件读取成功：{file_path}, 大小：{len(file_bytes)} bytes")
-
-            filename = f"report.md"
 
             # 优先使用 Webhook
             if self._discord_config['webhook_url']:

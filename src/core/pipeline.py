@@ -3182,45 +3182,54 @@ class StockAnalysisPipeline:
                 logger.info(f"当前文件摘要配置：NOTIFICATION_FILE_WITH_SUMMARY={file_with_summary}")
 
                 if push_mode == 'file':
-                    # 文件推送模式：保存完整报告到文件，然后发送文件+简短摘要
+                    # 文件推送模式：保存完整报告到文件，然后发送短摘要+真实文件附件
                     logger.info("使用文件推送模式...")
 
                     # 文件推送模式下，使用完整报告（包含所有股票的详细分析）
                     full_report = self._generate_aggregate_report(results, ReportType.FULL)
-                    filepath = self.notifier.save_report_to_file(full_report)
+                    filepath = self.notifier.save_report_to_file(full_report, "report.md")
                     logger.info(f"完整报告已保存到文件：{filepath}")
 
-                    # 生成摘要（如果配置了）
+                    summary_success = True
                     caption = None
                     if file_with_summary:
                         caption = self.notifier._generate_file_summary(full_report)
                         logger.info(f"生成文件推送摘要：{caption[:100]}...")
+                        summary_success = self.notifier.send(
+                            caption,
+                            email_send_to_all=True,
+                            route_type="report",
+                            force_text_mode=True,
+                        )
+                        logger.info("文件推送摘要发送结果：%s", summary_success)
 
                     # 调用文件推送
                     logger.info("开始调用 send_file() 发送文件...")
                     file_success = self.notifier.send_file(
                         filepath=filepath,
-                        caption=caption,
+                        caption=None,
                         route_type="report",
                     )
+
+                    overall_success = bool(file_success and summary_success)
 
                     # 记录推送结果
                     notification_run = self._build_notification_run_snapshot(
                         channel="file_push",
-                        status="success" if file_success else "failed",
-                        success=file_success,
+                        status="success" if overall_success else "failed",
+                        success=overall_success,
                     )
                     record_notification_run(
                         channel="file_push",
-                        status="success" if file_success else "failed",
-                        success=file_success,
+                        status="success" if overall_success else "failed",
+                        success=overall_success,
                     )
                     self._refresh_saved_diagnostic_snapshot(
                         results=results,
                         notification_run=notification_run,
                     )
 
-                    if file_success:
+                    if overall_success:
                         logger.info("决策仪表盘文件推送成功")
                         return  # 文件推送成功，直接返回
                     else:

@@ -566,6 +566,19 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
     """报告生成与选路相关测试。"""
 
     @mock.patch("src.notification.get_config")
+    def test_generate_file_summary_uses_canonical_report_filename(self, mock_get_config: mock.MagicMock):
+        mock_get_config.return_value = _make_config()
+        service = NotificationService()
+
+        summary = service._generate_file_summary(
+            "# 🎯 2026-07-06 决策仪表盘\n\n### 股票A\n🟢买入\n### 股票B\n🟡观望\n"
+        )
+
+        self.assertIn("请查看附件 report.md", summary)
+        self.assertNotIn("report_", summary)
+
+
+    @mock.patch("src.notification.get_config")
     def test_generate_aggregate_report_routes_by_report_type(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config()
         service = NotificationService()

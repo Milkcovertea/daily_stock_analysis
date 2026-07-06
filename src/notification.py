@@ -2794,10 +2794,10 @@ class NotificationService(
         sell_count = content.count("🔴卖出")
 
         return (
-            f"📊 {date_str} 股票分析报告\n\n"
+            f"📊 {date_str} 股票分析已完成\n\n"
             f"共分析 {stock_count} 只股票\n"
             f"🟢 买入: {buy_count}  🟡 观望: {hold_count}  🔴 卖出: {sell_count}\n\n"
-            f"[附件] report_{date_str.replace('-', '')}.md"
+            f"请查看附件 report.md"
         )
 
     def save_report_to_file(
@@ -3018,11 +3018,7 @@ class NotificationService(
         try:
             from src.notification_sender import DiscordSender
 
-            sender = DiscordSender(
-                webhook_url=self.discord_webhook_url,
-                bot_token=self.discord_bot_token,
-                main_channel_id=self.discord_main_channel_id,
-            )
+            sender = DiscordSender(self._config)
 
             # Discord支持发送文件
             success = sender.send_file(

@@ -67,6 +67,7 @@ from datetime import date, datetime, timezone, timedelta
 
 from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
+from src.enums import ReportType
 from src.logging_config import setup_logging
 from src.services.stock_list_parser import split_stock_list
 from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
@@ -630,10 +631,11 @@ def _save_reused_market_review_report(
     config: Config,
     trigger_source: str,
     region: str,
-) -> None:
+    filename: Optional[str] = None,
+) -> str:
     body = str(market_report or "").strip()
     if not body:
-        return
+        return ""
     title = (
         "# 🎯 Market Review"
         if str(getattr(config, "report_language", "zh")).strip().lower() == "en"
@@ -642,8 +644,10 @@ def _save_reused_market_review_report(
     if not any(body.startswith(item) for item in ("# 🎯 大盘复盘", "# 🎯 Market Review")):
         body = f"{title}\n\n{body}"
     try:
-        date_str = datetime.now().strftime('%Y%m%d')
-        report_filename = f"market_review_{date_str}.md"
+        report_filename = filename
+        if not report_filename:
+            date_str = datetime.now().strftime('%Y%m%d')
+            report_filename = f"market_review_{date_str}.md"
         filepath = notifier.save_report_to_file(body, report_filename)
         logger.info(
             "[MarketReview] component=market_review action=save_reused_report "
@@ -652,8 +656,10 @@ def _save_reused_market_review_report(
             region,
             filepath,
         )
+        return str(filepath)
     except Exception as exc:
         logger.warning("复用大盘上下文保存大盘复盘报告失败: %s", exc)
+        return ""
 
 
 def run_full_analysis(
@@ -896,22 +902,81 @@ def run_full_analysis(
 
         # Issue #190: 合并推送（个股+大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:
-            parts = []
-            if market_report:
-                parts.append(f"# 📈 大盘复盘\n\n{market_report}")
-            if results:
-                dashboard_content = pipeline.notifier.generate_aggregate_report(
-                    results,
-                    getattr(config, 'report_type', 'simple'),
-                )
-                parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
-            if parts:
-                combined_content = "\n\n---\n\n".join(parts)
-                if pipeline.notifier.is_available():
-                    if pipeline.notifier.send(combined_content, email_send_to_all=True, route_type="report"):
-                        logger.info("已合并推送（个股+大盘复盘）")
-                    else:
-                        logger.warning("合并推送失败")
+            if getattr(config, 'notification_push_mode', 'text').strip().lower() == 'file':
+                file_with_summary = getattr(config, 'notification_file_with_summary', True)
+                overall_success = True
+
+                if results:
+                    dashboard_content = pipeline.notifier.generate_aggregate_report(
+                        results,
+                        ReportType.FULL,
+                    )
+                    report_path = pipeline.notifier.save_report_to_file(dashboard_content, "report.md")
+                else:
+                    report_path = ""
+
+                market_path = ""
+                if market_report:
+                    market_path = _save_reused_market_review_report(
+                        pipeline.notifier,
+                        market_report,
+                        config=config,
+                        trigger_source="schedule" if getattr(args, 'schedule', False) else "cli",
+                        region=market_review_region,
+                        filename="markets.md",
+                    )
+
+                if file_with_summary:
+                    summary_content = (
+                        pipeline.notifier._generate_file_summary(dashboard_content)
+                        if results
+                        else "📈 大盘复盘已完成，请查看附件 markets.md"
+                    )
+                    summary_success = pipeline.notifier.send(
+                        summary_content,
+                        email_send_to_all=True,
+                        route_type="report",
+                        force_text_mode=True,
+                    )
+                    overall_success = bool(overall_success and summary_success)
+
+                if report_path:
+                    report_success = pipeline.notifier.send_file(
+                        filepath=report_path,
+                        caption=None,
+                        route_type="report",
+                    )
+                    overall_success = bool(overall_success and report_success)
+
+                if market_path:
+                    market_success = pipeline.notifier.send_file(
+                        filepath=market_path,
+                        caption=None,
+                        route_type="report",
+                    )
+                    overall_success = bool(overall_success and market_success)
+
+                if overall_success:
+                    logger.info("已按文件模式合并推送（摘要 + report.md + markets.md）")
+                else:
+                    logger.warning("文件模式合并推送失败")
+            else:
+                parts = []
+                if market_report:
+                    parts.append(f"# 📈 大盘复盘\n\n{market_report}")
+                if results:
+                    dashboard_content = pipeline.notifier.generate_aggregate_report(
+                        results,
+                        getattr(config, 'report_type', 'simple'),
+                    )
+                    parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
+                if parts:
+                    combined_content = "\n\n---\n\n".join(parts)
+                    if pipeline.notifier.is_available():
+                        if pipeline.notifier.send(combined_content, email_send_to_all=True, route_type="report"):
+                            logger.info("已合并推送（个股+大盘复盘）")
+                        else:
+                            logger.warning("合并推送失败")
 
         # 输出摘要
         if results:
