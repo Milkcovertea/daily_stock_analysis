@@ -551,21 +551,32 @@ jobs:
             echo ""
 
             # 从输出中提取最终股票列表
-            # 方法1: 查找"最终股票列表（逗号分隔）："行（兼容有无 emoji）
+            # 方法1: 查找"最终股票列表（逗号分隔）："行（最可靠）
             STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "最终股票列表（逗号分隔）" | cut -d':' -f2)
 
-            # 方法2: 如果方法1失败，查找"STOCK_LIST_OUTPUT="
+            # 方法2: 如果方法1失败，查找"STOCK_LIST_OUTPUT="（备用）
             if [ -z "$STOCK_LIST_LINE" ]; then
-              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "STOCK_LIST_OUTPUT=" | cut -d'=' -f2)
-            fi
-
-            # 方法3: 如果方法2也失败，尝试从"筛选结果："行提取
-            if [ -z "$STOCK_LIST_LINE" ]; then
-              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "筛选结果" | cut -d':' -f2)
+              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "^STOCK_LIST_OUTPUT=" | cut -d'=' -f2)
             fi
 
             # 清理空格
             STOCK_LIST_OUTPUT=$(echo "$STOCK_LIST_LINE" | tr -d ' ')
+
+            # 验证提取结果：必须是有效的股票代码格式（数字，可能包含逗号）
+            # 排除统计数字（如"48"）
+            if [ -n "$STOCK_LIST_OUTPUT" ]; then
+              # 检查是否包含非数字字符（除了逗号）
+              if echo "$STOCK_LIST_OUTPUT" | grep -q '[^0-9,]'; then
+                echo "⚠️ 提取结果包含无效字符：$STOCK_LIST_OUTPUT"
+                STOCK_LIST_OUTPUT=""
+              fi
+            fi
+
+            if [ -z "$STOCK_LIST_OUTPUT" ]; then
+              echo "⚠️ 无法从输出中提取股票列表"
+              echo "调试信息：尝试提取的行如下"
+              echo "$SCREEN_OUTPUT" | grep -E "(最终股票|STOCK_LIST_OUTPUT)" || echo "未找到相关行"
+            fi
 
             if [ -n "$STOCK_LIST_OUTPUT" ]; then
               echo "✅ 股票筛选成功！"
