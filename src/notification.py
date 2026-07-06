@@ -2796,8 +2796,7 @@ class NotificationService(
         return (
             f"📊 {date_str} 股票分析报告\n\n"
             f"共分析 {stock_count} 只股票\n"
-            f"🟢 买入: {buy_count}  🟡 观望: {hold_count}  🔴 卖出: {sell_count}\n\n"
-            f"[附件] report_{date_str.replace('-', '')}.md"
+            f"🟢 买入: {buy_count}  🟡 观望: {hold_count}  🔴 卖出: {sell_count}"
         )
 
     def save_report_to_file(
