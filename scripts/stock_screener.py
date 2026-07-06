@@ -103,66 +103,117 @@ class StockScreener:
         """
         logger.info(f"正在获取全部 A 股列表...（最多重试{max_retries}次）")
 
+        # 尝试东方财富接口（主数据源）
+        df = self._try_fetch_from_em(max_retries, retry_delay)
+
+        # 如果东方财富失败，尝试新浪财经接口（备用数据源）
+        if df is None or len(df) == 0:
+            logger.warning("东方财富接口失败，尝试新浪财经接口作为备用...")
+            df = self._try_fetch_from_sina(max_retries, retry_delay)
+
+        # 如果两个接口都失败，返回 None
+        if df is None or len(df) == 0:
+            logger.error("所有数据源均失败，将触发Fallback机制")
+            return None
+
+        return df
+
+    def _try_fetch_from_em(self, max_retries: int, retry_delay: int) -> Optional[pd.DataFrame]:
+        """尝试从东方财富接口获取数据"""
+        import akshare as ak
+
         for attempt in range(1, max_retries + 1):
             try:
-                # 使用 akshare 获取 A 股列表
-                import akshare as ak
-
-                # 获取 A 股实时行情数据（包含基本面信息）
-                logger.info(f"第{attempt}次尝试获取数据...")
+                logger.info(f"[东方财富] 第{attempt}次尝试获取A股实时行情...")
                 df = ak.stock_zh_a_spot_em()
 
                 if df is None or len(df) == 0:
-                    logger.error(f"第{attempt}次尝试失败：返回数据为空")
+                    logger.error(f"[东方财富] 第{attempt}次尝试失败：返回数据为空")
                     if attempt < max_retries:
-                        logger.info(f"等待{retry_delay}秒后重试...")
+                        logger.info(f"[东方财富] 等待{retry_delay}秒后重试...")
                         import time
                         time.sleep(retry_delay)
                         continue
                     else:
-                        logger.error("所有尝试均失败：返回数据为空")
+                        logger.error("[东方财富] 所有尝试均失败：返回数据为空")
                         return None
 
-                logger.info(f"成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
-
-                # 标准化列名（akshare 返回的列名可能变化）
-                # 确保有我们需要的字段：代码、名称、收盘价、成交额
-                required_columns = {
-                    '代码': 'code',
-                    '名称': 'name',
-                    '最新价': 'close',
-                    '成交额': 'amount',
-                    '涨跌幅': 'pct_chg',
-                    '涨速': 'change_rate',
-                    '换手': 'turnover',
-                    '量比': 'volume_ratio',
-                    '振幅': 'amplitude',
-                    '总市值': 'market_cap',
-                    '市盈率-动态': 'pe_ratio'
-                }
-
-                # 重命名列
-                for cn_name, en_name in required_columns.items():
-                    if cn_name in df.columns:
-                        df[en_name] = df[cn_name]
-
-                # 确保代码是字符串格式
-                df['code'] = df['code'].astype(str).str.zfill(6)
-
-                return df
+                logger.info(f"[东方财富] 成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
+                return self._normalize_dataframe(df)
 
             except Exception as e:
-                logger.warning(f"第{attempt}次尝试失败：{type(e).__name__} - {e}")
+                logger.warning(f"[东方财富] 第{attempt}次尝试失败：{type(e).__name__} - {e}")
                 if attempt < max_retries:
-                    logger.info(f"等待{retry_delay}秒后重试...")
+                    logger.info(f"[东方财富] 等待{retry_delay}秒后重试...")
                     import time
                     time.sleep(retry_delay)
                 else:
-                    logger.error(f"所有{max_retries}次尝试均失败：{type(e).__name__} - {e}")
-                    logger.error("股票筛选失败，将触发Fallback机制")
+                    logger.error(f"[东方财富] 所有{max_retries}次尝试均失败：{type(e).__name__} - {e}")
                     return None
 
         return None
+
+    def _try_fetch_from_sina(self, max_retries: int, retry_delay: int) -> Optional[pd.DataFrame]:
+        """尝试从新浪财经接口获取数据（备用数据源）"""
+        import akshare as ak
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"[新浪财经] 第{attempt}次尝试获取A股实时行情...")
+                df = ak.stock_zh_a_spot()
+
+                if df is None or len(df) == 0:
+                    logger.error(f"[新浪财经] 第{attempt}次尝试失败：返回数据为空")
+                    if attempt < max_retries:
+                        logger.info(f"[新浪财经] 等待{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error("[新浪财经] 所有尝试均失败：返回数据为空")
+                        return None
+
+                logger.info(f"[新浪财经] 成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
+                return self._normalize_dataframe(df)
+
+            except Exception as e:
+                logger.warning(f"[新浪财经] 第{attempt}次尝试失败：{type(e).__name__} - {e}")
+                if attempt < max_retries:
+                    logger.info(f"[新浪财经] 等待{retry_delay}秒后重试...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"[新浪财经] 所有{max_retries}次尝试均失败：{type(e).__name__} - {e}")
+                    return None
+
+        return None
+
+    def _normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """标准化 DataFrame 列名"""
+        # 确保有我们需要的字段：代码、名称、收盘价、成交额
+        required_columns = {
+            '代码': 'code',
+            '名称': 'name',
+            '最新价': 'close',
+            '成交额': 'amount',
+            '涨跌幅': 'pct_chg',
+            '涨速': 'change_rate',
+            '换手': 'turnover',
+            '量比': 'volume_ratio',
+            '振幅': 'amplitude',
+            '总市值': 'market_cap',
+            '市盈率-动态': 'pe_ratio'
+        }
+
+        # 重命名列
+        for cn_name, en_name in required_columns.items():
+            if cn_name in df.columns:
+                df[en_name] = df[cn_name]
+
+        # 确保代码是字符串格式
+        df['code'] = df['code'].astype(str).str.zfill(6)
+
+        return df
 
     def filter_stocks(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
         """
