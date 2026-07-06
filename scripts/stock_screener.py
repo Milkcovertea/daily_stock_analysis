@@ -30,6 +30,7 @@
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -37,6 +38,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+
+# 设置 UTF-8 输出编码（解决 Windows 命令行乱码问题）
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
