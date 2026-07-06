@@ -90,27 +90,51 @@ class StockScreener:
             if self.base_stock_list:
                 logger.info(f"基础股票池：{len(self.base_stock_list)}只股票 - {','.join(self.base_stock_list)}")
 
-    def get_all_a_shares(self) -> Optional[pd.DataFrame]:
+    def get_all_a_shares(self, max_retries: int = 3, retry_delay: int = 5) -> Optional[pd.DataFrame]:
         """
-        获取全部 A 股列表
+        获取全部 A 股列表（带重试机制）
+
+        Args:
+            max_retries: 最大重试次数，默认3次
+            retry_delay: 重试间隔秒数，默认5秒
 
         Returns:
             包含所有 A 股基本信息的 DataFrame，失败返回 None
         """
-        logger.info("正在获取全部 A 股列表...")
+        logger.info(f"正在获取全部 A 股列表...（最多重试{max_retries}次）")
 
-        try:
-            # 使用 akshare 获取 A 股列表
-            import akshare as ak
+        for attempt in range(1, max_retries + 1):
+            try:
+                # 使用 akshare 获取 A 股列表
+                import akshare as ak
 
-            # 获取 A 股实时行情数据（包含基本面信息）
-            df = ak.stock_zh_a_spot_em()
+                # 获取 A 股实时行情数据（包含基本面信息）
+                logger.info(f"第{attempt}次尝试获取数据...")
+                df = ak.stock_zh_a_spot_em()
 
-            if df is None or len(df) == 0:
-                logger.error("获取 A 股列表失败：返回数据为空")
-                return None
+                if df is None or len(df) == 0:
+                    logger.error(f"第{attempt}次尝试失败：返回数据为空")
+                    if attempt < max_retries:
+                        logger.info(f"等待{retry_delay}秒后重试...")
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    return None
 
-            logger.info(f"成功获取 {len(df)} 只 A 股实时行情数据")
+                logger.info(f"✅ 成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
+                return df
+
+            except Exception as e:
+                logger.warning(f"第{attempt}次尝试失败：{e}")
+                if attempt < max_retries:
+                    logger.info(f"等待{retry_delay}秒后重试...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"所有{max_retries}次尝试均失败，放弃获取")
+                    return None
+
+        return None
 
             # 标准化列名（akshare 返回的列名可能变化）
             # 确保有我们需要的字段：代码、名称、收盘价、成交额
