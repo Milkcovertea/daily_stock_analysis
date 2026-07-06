@@ -288,3 +288,141 @@ class DiscordSender:
             pass
 
         return float(2 ** attempt)
+
+    def send_file(self, file_path: str, content: Optional[str] = None) -> bool:
+        """
+        发送文件到 Discord（支持 Webhook 和 Bot API）
+
+        Args:
+            file_path: Markdown文件路径
+            content: 消息内容（简短摘要）
+
+        Returns:
+            bool: 是否发送成功
+        """
+        if not self._is_discord_configured():
+            logger.warning("Discord 配置不完整，跳过文件发送")
+            return False
+
+        try:
+            # 读取文件
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
+
+            filename = f"report.md"
+
+            # 优先使用 Webhook
+            if self._discord_config['webhook_url']:
+                return self._send_discord_file_webhook(
+                    file_bytes,
+                    filename,
+                    content,
+                    timeout_seconds=30,
+                )
+
+            # 其次使用 Bot API
+            if self._discord_config['bot_token'] and self._discord_config['channel_id']:
+                return self._send_discord_file_bot(
+                    file_bytes,
+                    filename,
+                    content,
+                    timeout_seconds=30,
+                )
+
+            logger.warning("Discord 配置不完整，无法发送文件")
+            return False
+
+        except FileNotFoundError:
+            logger.error(f"文件不存在：{file_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Discord 文件发送异常：{e}")
+            return False
+
+    def _send_discord_file_webhook(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        content: Optional[str] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """使用 Webhook 发送文件到 Discord"""
+        url = self._discord_config['webhook_url']
+
+        try:
+            # Discord Webhook 支持 multipart/form-data 上传文件
+            data = {}
+            if content:
+                data['content'] = content
+
+            files = {'file': (filename, file_bytes, 'text/markdown')}
+
+            response = requests.post(
+                url,
+                data=data,
+                files=files,
+                verify=self._webhook_verify_ssl,
+                timeout=timeout_seconds or 30,
+            )
+
+            if response.status_code in (200, 204):
+                logger.info(f"Discord Webhook 文件发送成功：{filename}")
+                return True
+            else:
+                logger.error(f"Discord Webhook 文件发送失败：{response.status_code} {response.text[:200]}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Discord Webhook 文件发送异常：{e}")
+            return False
+
+    def _send_discord_file_bot(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        content: Optional[str] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """使用 Bot API 发送文件到 Discord"""
+        headers = {
+            'Authorization': f'Bot {self._discord_config["bot_token"]}',
+        }
+
+        # Discord Bot API 使用 multipart/form-data 上传文件
+        form_data = {}
+        if content:
+            form_data['content'] = content
+
+        files = {
+            'file': (filename, file_bytes, 'text/markdown'),
+        }
+
+        # 添加 JSON payload（Discord Bot API 需要）
+        json_payload = {'content': content} if content else {}
+
+        url = f'https://discord.com/api/v10/channels/{self._discord_config["channel_id"]}/messages'
+
+        try:
+            # 使用 data 而不是 json，因为我们需要 multipart/form-data
+            response = requests.post(
+                url,
+                headers=headers,
+                data=form_data,
+                files=files,
+                timeout=timeout_seconds or 30,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('id'):
+                    logger.info(f"Discord Bot 文件发送成功：{filename}")
+                    return True
+
+            logger.error(f"Discord Bot 文件发送失败：{response.status_code} {response.text[:200]}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Discord Bot 文件发送异常：{e}")
+            return False

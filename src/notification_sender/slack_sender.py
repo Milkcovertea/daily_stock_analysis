@@ -237,3 +237,92 @@ class SlackSender:
 
         logger.warning("Slack 图片发送失败，且无回退内容")
         return False
+
+    def upload_file(
+        self,
+        file_path: str,
+        initial_comment: Optional[str] = None,
+        channels: Optional[str] = None
+    ) -> bool:
+        """
+        上传文件到 Slack（使用新版文件上传 API）
+
+        Args:
+            file_path: Markdown文件路径
+            initial_comment: 初始评论（简短摘要）
+            channels: 频道ID（逗号分隔，默认使用配置的channel_id）
+
+        Returns:
+            bool: 是否上传成功
+        """
+        if not self._use_bot:
+            logger.warning("Slack Bot 配置不完整，无法上传文件")
+            return False
+
+        try:
+            # 读取文件
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
+
+            filename = f"report.md"
+            file_size = len(file_bytes)
+
+            headers = {'Authorization': f'Bearer {self._slack_bot_token}'}
+            target_channels = channels or self._slack_channel_id
+
+            # Step 1: 获取上传 URL
+            resp1 = requests.post(
+                'https://slack.com/api/files.getUploadURLExternal',
+                headers=headers,
+                data={
+                    'filename': filename,
+                    'length': file_size,
+                    'alt_txt': initial_comment or '',
+                    'snippet_type': 'markdown',
+                },
+                timeout=30,
+            )
+            result1 = resp1.json()
+            if not result1.get("ok"):
+                logger.error("Slack 获取上传 URL 失败：%s", result1.get('error', 'unknown'))
+                return False
+
+            upload_url = result1['upload_url']
+            file_id = result1['file_id']
+
+            # Step 2: 上传文件内容（raw body）
+            resp2 = requests.post(
+                upload_url,
+                data=file_bytes,
+                headers={'Content-Type': 'application/octet-stream'},
+                timeout=30,
+            )
+            if resp2.status_code != 200:
+                logger.error("Slack 文件上传失败：HTTP %s", resp2.status_code)
+                return False
+
+            # Step 3: 完成上传并分享到频道
+            resp3 = requests.post(
+                'https://slack.com/api/files.completeUploadExternal',
+                headers={**headers, 'Content-Type': 'application/json'},
+                json={
+                    'files': [{'id': file_id, 'title': '股票分析报告'}],
+                    'channel_id': target_channels,
+                    'initial_comment': initial_comment or '',
+                },
+                timeout=30,
+            )
+            result3 = resp3.json()
+            if result3.get("ok"):
+                logger.info(f"Slack Bot 文件上传成功：{filename}")
+                return True
+
+            logger.error("Slack 完成上传失败：%s", result3.get('error', 'unknown'))
+            return False
+
+        except FileNotFoundError:
+            logger.error(f"文件不存在：{file_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Slack Bot 文件上传异常：%s", e)
+            return False

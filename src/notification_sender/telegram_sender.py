@@ -301,6 +301,60 @@ class TelegramSender:
             logger.error("Telegram 图片发送异常: %s", e)
             return False
 
+    def send_document(self, document_path: str, caption: Optional[str] = None) -> bool:
+        """
+        发送文档文件到 Telegram
+
+        Args:
+            document_path: Markdown文件路径
+            caption: 文档说明文字（简短摘要）
+
+        Returns:
+            bool: 是否发送成功
+        """
+        if not self._is_telegram_configured():
+            logger.warning("Telegram 配置不完整，跳过文档发送")
+            return False
+
+        bot_token = self._telegram_config['bot_token']
+        chat_id = self._telegram_config['chat_id']
+        message_thread_id = self._telegram_config.get('message_thread_id')
+        api_url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+
+        try:
+            # 准备文件
+            with open(document_path, 'rb') as f:
+                document_bytes = f.read()
+
+            # 构建请求
+            data = {"chat_id": chat_id}
+            if message_thread_id:
+                data['message_thread_id'] = message_thread_id
+
+            # 添加caption（如果提供）
+            if caption:
+                data['caption'] = caption
+                data['parse_mode'] = 'Markdown'
+
+            files = {"document": (f"report.md", document_bytes, "text/markdown")}
+
+            # 发送请求
+            response = requests.post(api_url, data=data, files=files, timeout=30)
+
+            if response.status_code == 200 and response.json().get('ok'):
+                logger.info(f"Telegram 文档发送成功：{document_path}")
+                return True
+            else:
+                logger.error(f"Telegram 文档发送失败: {response.text[:200]}")
+                return False
+
+        except FileNotFoundError:
+            logger.error(f"文档文件不存在：{document_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Telegram 文档发送异常：{e}")
+            return False
+
     def _convert_to_telegram_markdown(self, text: str) -> str:
         """
         将标准 Markdown 转换为 Telegram 支持的格式

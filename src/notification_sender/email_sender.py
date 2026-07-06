@@ -223,6 +223,97 @@ class EmailSender:
         finally:
             self._close_server(server)
 
+    def send_with_attachment(
+        self,
+        subject: str,
+        body: str,
+        attachment_path: str,
+        receivers: Optional[List[str]] = None
+    ) -> bool:
+        """
+        发送带附件的邮件
+
+        Args:
+            subject: 邮件主题
+            body: 邮件正文
+            attachment_path: 附件文件路径
+            receivers: 收件人列表
+
+        Returns:
+            bool: 是否发送成功
+        """
+        if not self._is_email_configured():
+            logger.warning("邮件配置不完整，跳过附件发送")
+            return False
+
+        sender = self._email_config['sender']
+        password = self._email_config['password']
+        receivers = receivers or self._email_config['receivers']
+        server: Optional[smtplib.SMTP] = None
+
+        try:
+            # 构建邮件
+            msg = MIMEMultipart()
+            msg['Subject'] = Header(subject, 'utf-8')
+            msg['From'] = self._format_sender_address(sender)
+            msg['To'] = ', '.join(receivers)
+
+            # 添加正文
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+            # 添加附件
+            with open(attachment_path, 'rb') as f:
+                from email.mime.base import MIMEBase
+                from email import encoders
+
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(f.read())
+                encoders.encode_base64(part)
+
+                filename = f"report.md"
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{filename}"'
+                )
+                msg.attach(part)
+
+            # 自动识别 SMTP 配置
+            domain = sender.split('@')[-1].lower()
+            smtp_config = SMTP_CONFIGS.get(domain)
+
+            if smtp_config:
+                smtp_server = smtp_config['server']
+                smtp_port = smtp_config['port']
+                use_ssl = smtp_config['ssl']
+                logger.info(f"自动识别邮箱类型：{domain} -> {smtp_server}:{smtp_port}")
+            else:
+                smtp_server = f"smtp.{domain}"
+                smtp_port = 465
+                use_ssl = True
+                logger.warning(f"未知邮箱类型 {domain}，尝试通用配置：{smtp_server}:{smtp_port}")
+
+            # 连接 SMTP 服务器
+            if use_ssl:
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+            else:
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+
+            server.login(sender, password)
+            server.sendmail(sender, receivers, msg.as_string())
+            server.quit()
+
+            logger.info(f"带附件的邮件发送成功：{subject}, 附件：{attachment_path}")
+            return True
+
+        except FileNotFoundError:
+            logger.error(f"附件文件不存在：{attachment_path}")
+            return False
+        except Exception as e:
+            logger.error(f"发送带附件的邮件失败：{e}")
+            return False
+        finally:
+            self._close_server(server)
+
     def _send_email_with_inline_image(
         self, image_bytes: bytes, receivers: Optional[List[str]] = None
     ) -> bool:
