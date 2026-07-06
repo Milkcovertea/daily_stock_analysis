@@ -2665,23 +2665,140 @@ class NotificationService(
         severity: Optional[str] = None,
         dedup_key: Optional[str] = None,
         cooldown_key: Optional[str] = None,
+        force_text_mode: bool = False,
     ) -> bool:
         """
         统一发送接口 - 向所有已配置的渠道发送。
 
+        Args:
+            content: 消息内容（文本或Markdown）
+            email_stock_codes: 邮件分组股票代码（可选）
+            email_send_to_all: 邮件发送到所有收件人（可选）
+            route_type: 路由类型（report/alert/system_error）
+            severity: 严重程度（info/warning/error/critical）
+            dedup_key: 去重键（可选）
+            cooldown_key: 冷却键（可选）
+            force_text_mode: 强制使用文本模式（忽略配置）
+
         Returns:
             是否至少有一个渠道发送成功
         """
-        result = self.send_with_results(
-            content,
-            email_stock_codes=email_stock_codes,
-            email_send_to_all=email_send_to_all,
-            route_type=route_type,
-            severity=severity,
-            dedup_key=dedup_key,
-            cooldown_key=cooldown_key,
+        # 检查是否启用文件推送模式
+        push_mode = getattr(self._config, 'notification_push_mode', 'text').strip().lower()
+        use_file_mode = (push_mode == 'file') and (not force_text_mode)
+
+        if use_file_mode:
+            # 文件推送模式
+            logger.info("使用文件推送模式")
+
+            # 1. 保存报告到文件
+            date_str = datetime.now().strftime('%Y%m%d')
+            filename = f"report_{date_str}.md"
+            filepath = self.save_report_to_file(content, filename)
+
+            # 2. 生成摘要消息
+            caption = self._generate_file_summary(content)
+
+            # 3. 推送文件
+            with_summary = getattr(self._config, 'notification_file_with_summary', True)
+            if with_summary:
+                # 先发送摘要
+                text_success = self.send_with_results(
+                    caption,
+                    email_stock_codes=email_stock_codes,
+                    email_send_to_all=email_send_to_all,
+                    route_type=route_type,
+                    severity=severity,
+                    dedup_key=dedup_key,
+                    cooldown_key=cooldown_key,
+                )
+                logger.info(f"摘要发送结果：success={text_success.success}")
+
+            # 然后发送文件
+            file_success = self.send_file(
+                filepath=filepath,
+                caption=caption if not with_summary else None,
+                route_type=route_type,
+                severity=severity,
+            )
+            logger.info(f"文件发送结果：success={file_success}")
+
+            return text_success.success if with_summary else file_success
+
+        else:
+            # 传统文本推送模式
+            result = self.send_with_results(
+                content,
+                email_stock_codes=email_stock_codes,
+                email_send_to_all=email_send_to_all,
+                route_type=route_type,
+                severity=severity,
+                dedup_key=dedup_key,
+                cooldown_key=cooldown_key,
+            )
+            return bool(result.success)
+
+    def _generate_file_summary(self, content: str) -> str:
+        """
+        生成文件推送的摘要消息
+
+        Args:
+            content: 完整报告内容
+
+        Returns:
+            摘要消息
+        """
+        # 检查是否有自定义模板
+        template = getattr(self._config, 'notification_file_summary_template', '').strip()
+
+        if template:
+            # 使用自定义模板（Jinja2）
+            try:
+                from jinja2 import Template
+                jinja_template = Template(template)
+
+                # 提取报告中的关键信息
+                date_str = datetime.now().strftime('%Y-%m-%d')
+                stock_count = content.count("### ") - 1  # 减去标题
+                buy_count = content.count("🟢买入")
+                hold_count = content.count("🟡观望")
+                sell_count = content.count("🔴卖出")
+
+                # 查找评分最高的股票
+                import re
+                top_match = re.search(r'⭐ (.*?)\((\d+)\): (买入|观望|卖出) \| 评分 (\d+)', content)
+                top_stock_name = top_match.group(1) if top_match else "N/A"
+                top_stock_code = top_match.group(2) if top_match else "N/A"
+                top_score = int(top_match.group(4)) if top_match else 0
+
+                summary = jinja_template.render(
+                    date=date_str,
+                    stock_count=stock_count,
+                    buy_count=buy_count,
+                    hold_count=hold_count,
+                    sell_count=sell_count,
+                    top_stock_name=top_stock_name,
+                    top_stock_code=top_stock_code,
+                    top_score=top_score,
+                )
+                return summary.strip()
+
+            except Exception as e:
+                logger.warning(f"Jinja2模板渲染失败，使用默认摘要：{e}")
+
+        # 默认摘要
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        stock_count = content.count("### ") - 1
+        buy_count = content.count("🟢买入")
+        hold_count = content.count("🟡观望")
+        sell_count = content.count("🔴卖出")
+
+        return (
+            f"📊 {date_str} 股票分析报告\n\n"
+            f"共分析 {stock_count} 只股票\n"
+            f"🟢 买入: {buy_count}  🟡 观望: {hold_count}  🔴 卖出: {sell_count}\n\n"
+            f"[附件] report_{date_str.replace('-', '')}.md"
         )
-        return bool(result.success)
 
     def save_report_to_file(
         self,
@@ -2715,6 +2832,249 @@ class NotificationService(
 
         logger.info(f"日报已保存到: {filepath}")
         return str(filepath)
+
+    def send_file(
+        self,
+        filepath: str,
+        caption: Optional[str] = None,
+        route_type: Optional[str] = None,
+        severity: Optional[str] = None,
+    ) -> bool:
+        """
+        推送文件到所有已配置的渠道
+
+        Args:
+            filepath: 文件路径
+            caption: 文件说明/标题（可选）
+            route_type: 路由类型（report/alert/system_error）
+            severity: 严重程度（info/warning/error/critical）
+
+        Returns:
+            是否至少有一个渠道发送成功
+        """
+        from pathlib import Path
+
+        if not Path(filepath).exists():
+            logger.error(f"文件不存在：{filepath}")
+            return False
+
+        # 获取路由配置
+        route_config = get_notification_route_config(route_type, severity)
+        if route_config is None:
+            route_config = get_notification_route_config("report")
+
+        # 分割渠道
+        explicit_channels, use_all = split_notification_route_channels(route_config)
+
+        # 收集所有要发送的渠道
+        channels_to_use = []
+        if use_all:
+            channels_to_use = self._get_all_configured_channels()
+        else:
+            channels_to_use = explicit_channels
+
+        if not channels_to_use:
+            logger.warning("没有配置任何通知渠道")
+            return False
+
+        success_count = 0
+        failed_channels = []
+
+        for channel in channels_to_use:
+            try:
+                if self._send_file_to_channel(channel, filepath, caption):
+                    success_count += 1
+                else:
+                    failed_channels.append(channel)
+            except Exception as e:
+                logger.error(f"向{channel}发送文件失败：{e}")
+                failed_channels.append(channel)
+
+        if success_count > 0:
+            logger.info(f"文件推送成功：{success_count}/{len(channels_to_use)}个渠道")
+            return True
+        else:
+            logger.error(f"文件推送失败：所有{len(channels_to_use)}个渠道都失败")
+            return False
+
+    def _get_all_configured_channels(self) -> List[str]:
+        """获取所有已配置的通知渠道"""
+        channels = []
+
+        # 检查各个渠道是否配置
+        if self.wechat_webhook_url:
+            channels.append("wechat")
+        if self.feishu_webhook_url or (self.feishu_app_id and self.feishu_chat_id):
+            channels.append("feishu")
+        if self.telegram_bot_token and self.telegram_chat_id:
+            channels.append("telegram")
+        if self.discord_webhook_url or (self.discord_bot_token and self.discord_main_channel_id):
+            channels.append("discord")
+        if self.email_sender and self.email_password:
+            channels.append("email")
+        if self.pushover_user_key and self.pushover_api_token:
+            channels.append("pushover")
+        if self.ntfy_url:
+            channels.append("ntfy")
+        if self.gotify_url and self.gotify_token:
+            channels.append("gotify")
+        if self.pushplus_token:
+            channels.append("pushplus")
+        if self.serverchan3_sendkey:
+            channels.append("serverchan3")
+        if self.custom_webhook_urls:
+            channels.append("custom")
+        if self.slack_bot_token or self.slack_webhook_url:
+            channels.append("slack")
+        if self.astrbot_url:
+            channels.append("astrbot")
+        if self.dingtalk_webhook_url:
+            channels.append("dingtalk")
+
+        return channels
+
+    def _send_file_to_channel(
+        self,
+        channel: str,
+        filepath: str,
+        caption: Optional[str] = None
+    ) -> bool:
+        """
+        向指定渠道发送文件
+
+        Args:
+            channel: 渠道名称
+            filepath: 文件路径
+            caption: 文件说明
+
+        Returns:
+            是否发送成功
+        """
+        from pathlib import Path
+
+        # 根据渠道类型选择发送器
+        if channel == "telegram":
+            return self._send_file_to_telegram(filepath, caption)
+        elif channel == "discord":
+            return self._send_file_to_discord(filepath, caption)
+        elif channel == "email":
+            return self._send_file_to_email(filepath, caption)
+        elif channel == "slack":
+            return self._send_file_to_slack(filepath, caption)
+        elif channel in ["wechat", "feishu"]:
+            # 企业微信/飞书暂不支持文件推送，fallback到文本
+            logger.warning(f"{channel}暂不支持文件推送，将使用文本模式")
+            if caption:
+                return self.send(caption, route_type="report")
+            return False
+        else:
+            # 其他渠道不支持文件推送
+            logger.warning(f"渠道{channel}不支持文件推送")
+            if caption:
+                return self.send(caption, route_type="report")
+            return False
+
+    def _send_file_to_telegram(self, filepath: str, caption: Optional[str]) -> bool:
+        """发送文件到Telegram"""
+        try:
+            from src.notification_sender import TelegramSender
+
+            sender = TelegramSender(
+                bot_token=self.telegram_bot_token,
+                chat_id=self.telegram_chat_id,
+                message_thread_id=self.telegram_message_thread_id,
+            )
+
+            # Telegram支持发送文档
+            success = sender.send_document(
+                document=filepath,
+                caption=caption,
+            )
+
+            if success:
+                logger.info(f"Telegram文件推送成功：{filepath}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Telegram文件推送失败：{e}")
+            return False
+
+    def _send_file_to_discord(self, filepath: str, caption: Optional[str]) -> bool:
+        """发送文件到Discord"""
+        try:
+            from src.notification_sender import DiscordSender
+
+            sender = DiscordSender(
+                webhook_url=self.discord_webhook_url,
+                bot_token=self.discord_bot_token,
+                main_channel_id=self.discord_main_channel_id,
+            )
+
+            # Discord支持发送文件
+            success = sender.send_file(
+                file_path=filepath,
+                content=caption,
+            )
+
+            if success:
+                logger.info(f"Discord文件推送成功：{filepath}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Discord文件推送失败：{e}")
+            return False
+
+    def _send_file_to_email(self, filepath: str, caption: Optional[str]) -> bool:
+        """发送文件到Email（作为附件）"""
+        try:
+            from src.notification_sender.email_sender import EmailSender
+
+            sender = EmailSender(
+                sender=self.email_sender,
+                password=self.email_password,
+                receivers=self.email_receivers,
+                sender_name=self.email_sender_name,
+            )
+
+            # Email支持附件
+            success = sender.send_with_attachment(
+                subject=caption or "股票分析报告",
+                body=caption or "请查看附件中的股票分析报告",
+                attachment_path=filepath,
+            )
+
+            if success:
+                logger.info(f"Email文件推送成功：{filepath}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Email文件推送失败：{e}")
+            return False
+
+    def _send_file_to_slack(self, filepath: str, caption: Optional[str]) -> bool:
+        """发送文件到Slack"""
+        try:
+            from src.notification_sender import SlackSender
+
+            sender = SlackSender(
+                bot_token=self.slack_bot_token,
+                webhook_url=self.slack_webhook_url,
+                channel_id=self.slack_channel_id,
+            )
+
+            # Slack支持上传文件
+            success = sender.upload_file(
+                file_path=filepath,
+                initial_comment=caption,
+            )
+
+            if success:
+                logger.info(f"Slack文件推送成功：{filepath}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Slack文件推送失败：{e}")
+            return False
 
 
 class NotificationBuilder:
