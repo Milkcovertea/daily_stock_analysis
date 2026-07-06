@@ -520,24 +520,32 @@ jobs:
             echo "🔍 执行股票筛选..."
             echo "=========================================="
 
-            # 运行筛选器（dry-run 模式，不保存文件，只输出结果）
-            python3 scripts/stock_screener.py \
-              --max-price "${SCREENER_MAX_PRICE:-50}" \
-              --top-n "${SCREENER_TOP_N:-5}" \
-              --dry-run \
-              --no-verbose
-
-            # 筛选器会输出 STOCK_LIST_OUTPUT，捕获它
-            # 注意：这里我们让筛选器直接输出到 stdout，然后解析
-
-            # 重新运行一次，捕获输出
+            # 运行筛选器并捕获所有输出
             SCREEN_OUTPUT=$(python3 scripts/stock_screener.py \
               --max-price "${SCREENER_MAX_PRICE:-50}" \
               --top-n "${SCREENER_TOP_N:-5}" \
               --dry-run 2>&1)
 
-            # 从输出中提取 STOCK_LIST_OUTPUT
-            STOCK_LIST_OUTPUT=$(echo "$SCREEN_OUTPUT" | grep "STOCK_LIST_OUTPUT=" | cut -d'=' -f2)
+            # 显示筛选器输出（方便调试）
+            echo "$SCREEN_OUTPUT"
+            echo ""
+
+            # 从输出中提取最终股票列表
+            # 方法1: 查找"最终股票列表（逗号分隔）："行
+            STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "💾 最终股票列表（逗号分隔）：" | cut -d'：' -f2)
+
+            # 方法2: 如果方法1失败，查找"STOCK_LIST_OUTPUT="
+            if [ -z "$STOCK_LIST_LINE" ]; then
+              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "STOCK_LIST_OUTPUT=" | cut -d'=' -f2)
+            fi
+
+            # 方法3: 如果方法2也失败，尝试从"筛选结果："行提取
+            if [ -z "$STOCK_LIST_LINE" ]; then
+              STOCK_LIST_LINE=$(echo "$SCREEN_OUTPUT" | grep "📊 筛选结果：" | cut -d'：' -f2)
+            fi
+
+            # 清理空格
+            STOCK_LIST_OUTPUT=$(echo "$STOCK_LIST_LINE" | tr -d ' ')
 
             if [ -n "$STOCK_LIST_OUTPUT" ]; then
               echo "✅ 股票筛选成功！"
