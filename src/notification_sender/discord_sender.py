@@ -301,18 +301,29 @@ class DiscordSender:
             bool: 是否发送成功
         """
         if not self._is_discord_configured():
-            logger.warning("Discord 配置不完整，跳过文件发送")
+            logger.error("Discord 配置不完整，跳过文件发送。请检查 DISCORD_WEBHOOK_URL 是否已配置。")
             return False
 
         try:
+            # 检查文件是否存在
+            import os
+            if not os.path.exists(file_path):
+                logger.error(f"文件不存在：{file_path}")
+                logger.error(f"当前工作目录：{os.getcwd()}")
+                logger.error(f"文件路径绝对路径：{os.path.abspath(file_path)}")
+                return False
+
             # 读取文件
             with open(file_path, 'rb') as f:
                 file_bytes = f.read()
+
+            logger.info(f"Discord 文件读取成功：{file_path}, 大小：{len(file_bytes)} bytes")
 
             filename = f"report.md"
 
             # 优先使用 Webhook
             if self._discord_config['webhook_url']:
+                logger.info("使用 Discord Webhook 发送文件...")
                 return self._send_discord_file_webhook(
                     file_bytes,
                     filename,
@@ -322,6 +333,7 @@ class DiscordSender:
 
             # 其次使用 Bot API
             if self._discord_config['bot_token'] and self._discord_config['channel_id']:
+                logger.info("使用 Discord Bot API 发送文件...")
                 return self._send_discord_file_bot(
                     file_bytes,
                     filename,
@@ -329,14 +341,14 @@ class DiscordSender:
                     timeout_seconds=30,
                 )
 
-            logger.warning("Discord 配置不完整，无法发送文件")
+            logger.error("Discord 配置不完整，无法发送文件。请检查 DISCORD_WEBHOOK_URL 或 DISCORD_BOT_TOKEN+DISCORD_MAIN_CHANNEL_ID")
             return False
 
-        except FileNotFoundError:
-            logger.error(f"文件不存在：{file_path}")
+        except FileNotFoundError as e:
+            logger.error(f"文件不存在：{file_path}, 异常：{e}")
             return False
         except Exception as e:
-            logger.error(f"Discord 文件发送异常：{e}")
+            logger.error(f"Discord 文件发送异常：{e}", exc_info=True)
             return False
 
     def _send_discord_file_webhook(
@@ -351,12 +363,18 @@ class DiscordSender:
         url = self._discord_config['webhook_url']
 
         try:
+            logger.info(f"Discord Webhook URL: {url[:50]}...（已隐藏）")
+            logger.info(f"文件大小：{len(file_bytes)} bytes")
+            logger.info(f"摘要内容：{content[:100] if content else '无'}")
+
             # Discord Webhook 支持 multipart/form-data 上传文件
             data = {}
             if content:
                 data['content'] = content
+                logger.info(f"发送带摘要的文件：{content[:50]}...")
 
             files = {'file': (filename, file_bytes, 'text/markdown')}
+            logger.info(f"准备发送文件：{filename}, MIME type: text/markdown")
 
             response = requests.post(
                 url,
@@ -366,15 +384,27 @@ class DiscordSender:
                 timeout=timeout_seconds or 30,
             )
 
+            logger.info(f"Discord Webhook 响应状态码：{response.status_code}")
+
             if response.status_code in (200, 204):
                 logger.info(f"Discord Webhook 文件发送成功：{filename}")
                 return True
             else:
-                logger.error(f"Discord Webhook 文件发送失败：{response.status_code} {response.text[:200]}")
+                logger.error(f"Discord Webhook 文件发送失败：HTTP {response.status_code}")
+                logger.error(f"响应内容：{response.text[:500]}")
                 return False
 
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Discord Webhook 请求超时：{e}")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Discord Webhook 连接错误：{e}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Discord Webhook 请求异常：{e}", exc_info=True)
+            return False
         except Exception as e:
-            logger.error(f"Discord Webhook 文件发送异常：{e}")
+            logger.error(f"Discord Webhook 文件发送异常：{e}", exc_info=True)
             return False
 
     def _send_discord_file_bot(

@@ -2859,19 +2859,31 @@ class NotificationService(
             return False
 
         # 获取路由配置
-        route_config = get_notification_route_config(route_type, severity)
+        route_config = get_notification_route_config(route_type)
         if route_config is None:
             route_config = get_notification_route_config("report")
 
-        # 分割渠道
-        explicit_channels, use_all = split_notification_route_channels(route_config)
-
-        # 收集所有要发送的渠道
-        channels_to_use = []
-        if use_all:
-            channels_to_use = self._get_all_configured_channels()
+        # 从配置中获取渠道列表
+        if route_config:
+            configured_channels = getattr(self._config, route_config["config_attr"], []) or []
         else:
-            channels_to_use = explicit_channels
+            configured_channels = []
+
+        # 分割有效和无效的渠道
+        valid_channels, invalid_channels = split_notification_route_channels(configured_channels)
+
+        if invalid_channels:
+            logger.warning(
+                "%s 包含未知通知渠道，将忽略：%s",
+                route_config["env_key"] if route_config else "NOTIFICATION_REPORT_CHANNELS",
+                ", ".join(invalid_channels),
+            )
+
+        # 如果配置了有效的渠道，就使用这些渠道；否则使用所有已配置的渠道
+        if valid_channels:
+            channels_to_use = valid_channels
+        else:
+            channels_to_use = self._get_all_configured_channels()
 
         if not channels_to_use:
             logger.warning("没有配置任何通知渠道")
@@ -2962,15 +2974,17 @@ class NotificationService(
         elif channel == "slack":
             return self._send_file_to_slack(filepath, caption)
         elif channel in ["wechat", "feishu"]:
-            # 企业微信/飞书暂不支持文件推送，fallback到文本
-            logger.warning(f"{channel}暂不支持文件推送，将使用文本模式")
-            if caption:
-                return self.send(caption, route_type="report")
+            # 企业微信/飞书暂不支持文件推送
+            logger.error(f"{channel}不支持文件推送模式，请切换到 Telegram/Discord/Email/Slack，或设置 NOTIFICATION_PUSH_MODE=text")
+            logger.error(f"文件路径：{filepath}")
             return False
         else:
             # 其他渠道不支持文件推送
-            logger.warning(f"渠道{channel}不支持文件推送")
+            logger.error(f"渠道{channel}不支持文件推送模式，请切换到 Telegram/Discord/Email/Slack，或设置 NOTIFICATION_PUSH_MODE=text")
+            logger.error(f"文件路径：{filepath}")
             if caption:
+                # 对于其他不支持的渠道，仍然回退到文本（保持向后兼容）
+                logger.warning(f"渠道{channel}将回退到文本模式发送摘要")
                 return self.send(caption, route_type="report")
             return False
 

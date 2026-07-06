@@ -3174,6 +3174,59 @@ class StockAnalysisPipeline:
             
             # 推送通知
             if self.notifier.is_available():
+                # 检查是否启用文件推送模式
+                push_mode = getattr(self.config, 'notification_push_mode', 'text')
+                file_with_summary = getattr(self.config, 'notification_file_with_summary', True)
+
+                logger.info(f"当前推送模式配置：NOTIFICATION_PUSH_MODE={push_mode}")
+                logger.info(f"当前文件摘要配置：NOTIFICATION_FILE_WITH_SUMMARY={file_with_summary}")
+
+                if push_mode == 'file':
+                    # 文件推送模式：保存报告到文件，然后发送文件+简短摘要
+                    logger.info("使用文件推送模式...")
+                    filepath = self.notifier.save_report_to_file(report)
+                    logger.info(f"报告已保存到文件：{filepath}")
+
+                    # 生成摘要（如果配置了）
+                    caption = None
+                    if file_with_summary:
+                        caption = self.notifier._generate_file_summary(report)
+                        logger.info(f"生成文件推送摘要：{caption[:100]}...")
+
+                    # 调用文件推送
+                    logger.info("开始调用 send_file() 发送文件...")
+                    file_success = self.notifier.send_file(
+                        filepath=filepath,
+                        caption=caption,
+                        route_type="report",
+                    )
+
+                    # 记录推送结果
+                    notification_run = self._build_notification_run_snapshot(
+                        channel="file_push",
+                        status="success" if file_success else "failed",
+                        success=file_success,
+                    )
+                    record_notification_run(
+                        channel="file_push",
+                        status="success" if file_success else "failed",
+                        success=file_success,
+                    )
+                    self._refresh_saved_diagnostic_snapshot(
+                        results=results,
+                        notification_run=notification_run,
+                    )
+
+                    if file_success:
+                        logger.info("决策仪表盘文件推送成功")
+                        return  # 文件推送成功，直接返回
+                    else:
+                        logger.error("决策仪表盘文件推送失败，不会回退到文本模式")
+                        logger.error("请检查：1) 通知渠道是否配置文件推送 2) 文件路径是否正确 3) 网络连接是否正常")
+                        # 文件推送失败时不回退到文本模式，直接记录错误并返回
+                        return
+
+                # 文本推送模式（默认）
                 channels = self.notifier.get_available_channels()
                 channels = self.notifier.get_channels_for_route("report", channels=channels)
 
