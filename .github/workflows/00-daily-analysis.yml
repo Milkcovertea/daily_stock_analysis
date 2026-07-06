@@ -396,16 +396,32 @@ jobs:
           # 可选值: tencent, akshare_sina, efinance, akshare_em, tushare
           # 如果有 Tushare Pro 高积分账号，可将 tushare 放在首位
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
-          
+
+          # ==========================================
+          # 自动筛选配置
+          # ==========================================
+          # 基础股票池（手动维护的实盘持仓或长期关注股票）
+          BASE_STOCK_LIST: ${{ vars.BASE_STOCK_LIST || secrets.BASE_STOCK_LIST }}
+          # 筛选器参数（可选，不配置则使用默认值）
+          SCREENER_MAX_PRICE: ${{ vars.SCREENER_MAX_PRICE || secrets.SCREENER_MAX_PRICE || '50' }}
+          SCREENER_TOP_N: ${{ vars.SCREENER_TOP_N || secrets.SCREENER_TOP_N || '5' }}
+          # 启用自动筛选（设为 true 启用，留空或 false 则使用手动配置的 STOCK_LIST）
+          AUTO_SCREEN_ENABLED: ${{ vars.AUTO_SCREEN_ENABLED || secrets.AUTO_SCREEN_ENABLED || 'false' }}
+
         run: |
-          # 解析自选股配置：
-          # 1. Repository/Environment secrets 或 Repository variables（STOCK_LIST_CONFIG）
-          # 2. 同名 Environment variables 注入的 runner 环境变量（STOCK_LIST）
-          # 3. 最小默认值
-          if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
-            export STOCK_LIST="$STOCK_LIST_CONFIG"
-          elif [ -z "${STOCK_LIST:-}" ]; then
-            export STOCK_LIST="600519"
+          # 解析基础股票池配置
+          if [ -n "${BASE_STOCK_LIST:-}" ]; then
+            export BASE_STOCK_LIST="$BASE_STOCK_LIST"
+            echo "📦 基础股票池已配置：${BASE_STOCK_LIST}"
+          else
+            echo "📦 基础股票池：未配置"
+          fi
+
+          # 判断是否启用自动筛选
+          if [ "${AUTO_SCREEN_ENABLED:-false}" = "true" ]; then
+            echo "🔍 自动筛选已启用，准备执行股票筛选..."
+          else
+            echo "🔍 自动筛选未启用，使用手动配置的 STOCK_LIST"
           fi
 
           # 处理 LITELLM YAML 配置文件
@@ -486,7 +502,64 @@ jobs:
           echo "  Slack: $(([ -n "$SLACK_WEBHOOK_URL" ] || ([ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL_ID" ])) && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "=========================================="
           echo ""
-          
+
+          # 解析自选股配置：
+          # 1. Repository/Environment secrets 或 Repository variables（STOCK_LIST_CONFIG）
+          # 2. 同名 Environment variables 注入的 runner 环境变量（STOCK_LIST）
+          # 3. 最小默认值
+          if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
+            export STOCK_LIST="$STOCK_LIST_CONFIG"
+          elif [ -z "${STOCK_LIST:-}" ]; then
+            export STOCK_LIST="600519"
+          fi
+
+          # 如果启用自动筛选，执行筛选器
+          if [ "${AUTO_SCREEN_ENABLED:-false}" = "true" ]; then
+            echo ""
+            echo "=========================================="
+            echo "🔍 执行股票筛选..."
+            echo "=========================================="
+
+            # 运行筛选器（dry-run 模式，不保存文件，只输出结果）
+            python3 scripts/stock_screener.py \
+              --max-price "${SCREENER_MAX_PRICE:-50}" \
+              --top-n "${SCREENER_TOP_N:-5}" \
+              --dry-run \
+              --no-verbose
+
+            # 筛选器会输出 STOCK_LIST_OUTPUT，捕获它
+            # 注意：这里我们让筛选器直接输出到 stdout，然后解析
+
+            # 重新运行一次，捕获输出
+            SCREEN_OUTPUT=$(python3 scripts/stock_screener.py \
+              --max-price "${SCREENER_MAX_PRICE:-50}" \
+              --top-n "${SCREENER_TOP_N:-5}" \
+              --dry-run 2>&1)
+
+            # 从输出中提取 STOCK_LIST_OUTPUT
+            STOCK_LIST_OUTPUT=$(echo "$SCREEN_OUTPUT" | grep "STOCK_LIST_OUTPUT=" | cut -d'=' -f2)
+
+            if [ -n "$STOCK_LIST_OUTPUT" ]; then
+              echo "✅ 股票筛选成功！"
+              echo "📊 筛选结果：$STOCK_LIST_OUTPUT"
+
+              # 更新 STOCK_LIST 环境变量为筛选结果
+              export STOCK_LIST="$STOCK_LIST_OUTPUT"
+              echo "📤 已更新 STOCK_LIST 为筛选结果"
+            else
+              echo "⚠️ 股票筛选失败或结果为空"
+              if [ -n "${BASE_STOCK_LIST:-}" ]; then
+                echo "🔄 FALLBACK 到基础股票池：${BASE_STOCK_LIST}"
+                export STOCK_LIST="$BASE_STOCK_LIST"
+              else
+                echo "⚠️ 无基础股票池，使用默认值：600519"
+                export STOCK_LIST="600519"
+              fi
+            fi
+
+            echo ""
+          fi
+
           # 构建命令行参数
           FORCE_RUN_ARG=""
           if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
@@ -495,6 +568,12 @@ jobs:
           fi
 
           # 执行分析
+          echo "=========================================="
+          echo "🚀 开始执行股票分析..."
+          echo "=========================================="
+          echo "📊 最终使用的股票列表：$STOCK_LIST"
+          echo ""
+
           if [ "$MODE" = "market-only" ]; then
             python main.py --market-review $FORCE_RUN_ARG
           elif [ "$MODE" = "stocks-only" ]; then

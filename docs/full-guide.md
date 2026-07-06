@@ -176,8 +176,221 @@ daily_stock_analysis/
 | `LONGBRIDGE_PUSH_CANDLESTICK_MODE` | K 线推送模式：`realtime` 或 `confirmed`（默认 `realtime`） | 可选 |
 | `LONGBRIDGE_PRINT_QUOTE_PACKAGES` | 连接时是否打印行情包（未设置时默认 `false`；设为 `1`/`true`/`yes` 开启） | 可选 |
 | `ENABLE_CHIP_DISTRIBUTION` | 启用筹码分布（Actions 默认 false；需筹码数据时在 Variables 中设为 true，接口可能不稳定） | 可选 |
+| `AUTO_SCREEN_ENABLED` | 启用自动股票筛选（`true`/`false`，默认 `false`）。设为 `true` 时每个交易日自动执行筛选器，结果与基础池合并 | 可选 |
+| `BASE_STOCK_LIST` | 基础股票池（逗号分隔，如 `600519,000001`）。筛选失败或结果为空时 fallback 到基础池；可与自动筛选配合使用 | 可选 |
+| `SCREENER_MAX_PRICE` | 筛选器最大收盘价（元），默认 `50`。可通过环境变量或 Variables 调整 | 可选 |
+| `SCREENER_TOP_N` | 筛选器返回股票数量，默认 `5`。可通过环境变量或 Variables 调整 | 可选 |
 
 > **GitHub Actions：** 仓库自带 `00-daily-analysis.yml` 已把上表中的 `LONGBRIDGE_*` 映射到任务环境。OAuth 方式需要一个 client_id（优先 `LONGBRIDGE_OAUTH_CLIENT_ID`；留空且无 Legacy Access Token 时使用 `LONGBRIDGE_APP_KEY` 兼容），并把本机 `~/.longbridge/openapi/tokens/<client_id>` 文件 base64 后保存为 Secret `LONGBRIDGE_OAUTH_TOKEN_CACHE_B64`；Legacy 方式仍可配置 `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN`。可选接入点变量（如 `LONGBRIDGE_REGION`）可放在 **Variables** 或 **Secrets**。
+
+---
+
+## 🤖 自动股票筛选配置
+
+> **功能说明**：每个交易日自动根据预设策略筛选股票，与手动维护的基础股票池合并，实现"自动筛选 + 实盘持仓"的混合模式。
+
+### 筛选策略（当前实现）
+
+1. **市场范围**：沪深主板（剔除创业板 300xxx、科创板 688xxx）
+2. **风险剔除**：剔除 ST 股票
+3. **价格约束**：收盘价 < 50 元（可配置）
+4. **排序规则**：按成交额降序排列
+5. **返回数量**：前 N 只（可配置，默认 5 只）
+
+### 配置方式
+
+#### 1. 启用自动筛选
+
+在 GitHub Actions Secrets/Variables 中添加：
+
+| 变量名 | 推荐位置 | 说明 |
+|--------|---------|------|
+| `AUTO_SCREEN_ENABLED` | Variables | 设为 `true` 启用自动筛选 |
+| `BASE_STOCK_LIST` | Secrets | 基础股票池（你的实盘持仓或长期关注股票） |
+| `SCREENER_MAX_PRICE` | Variables | 筛选器最大收盘价，默认 `50` |
+| `SCREENER_TOP_N` | Variables | 筛选器返回数量，默认 `5` |
+
+#### 2. 运行逻辑
+
+```
+┌─────────────────────────────────────┐
+│  每个交易日 18:00（定时触发）        │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  执行股票筛选器                      │
+│  - 获取全部 A 股                      │
+│  - 应用筛选策略                      │
+│  - 返回符合条件的股票                │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  合并基础股票池                      │
+│  - 自动筛选结果（去重）              │
+│  - + 基础池中未重复的股票            │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  Fallback 检查                       │
+│  - 筛选失败/结果为空 → 使用基础池    │
+│  - 无基础池 → 使用默认值 600519      │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  执行股票分析                        │
+│  - 使用最终股票列表                  │
+│  - 生成决策报告                      │
+│  - 推送到通知渠道                    │
+└─────────────────────────────────────┘
+```
+
+### 配置示例
+
+#### 示例 1：完全自动筛选（无基础池）
+
+```yaml
+# GitHub Actions Variables
+AUTO_SCREEN_ENABLED: "true"
+SCREENER_MAX_PRICE: "50"
+SCREENER_TOP_N: "5"
+# BASE_STOCK_LIST: 不配置
+```
+
+**效果**：每个交易日自动筛选 5 只符合条件的股票，无 fallback。
+
+#### 示例 2：自动筛选 + 基础池混合模式（推荐）
+
+```yaml
+# GitHub Actions Secrets
+BASE_STOCK_LIST: "600519,000001,300750"  # 你的实盘持仓
+
+# GitHub Actions Variables
+AUTO_SCREEN_ENABLED: "true"
+SCREENER_MAX_PRICE: "50"
+SCREENER_TOP_N: "5"
+```
+
+**效果**：
+- 自动筛选 5 只股票
+- 合并基础池中的 3 只股票（去重）
+- 最终分析 8 只股票（5 只自动 + 3 只基础）
+- 如果筛选失败，fallback 到基础池 3 只
+
+#### 示例 3：仅使用基础池（关闭自动筛选）
+
+```yaml
+# GitHub Actions Secrets
+BASE_STOCK_LIST: "600519,000001,300750"
+
+# GitHub Actions Variables
+AUTO_SCREEN_ENABLED: "false"  # 或不配置
+STOCK_LIST: "600519,000001,300750"  # 手动配置
+```
+
+**效果**：使用传统手动配置模式，不执行自动筛选。
+
+### 筛选器输出
+
+筛选器会生成两个文件：
+
+1. **JSON 报告**（`config/stocks.json`）：包含详细筛选信息和统计
+2. **纯文本列表**（`config/stocks.txt`）：逗号分隔的股票代码
+
+JSON 报告示例：
+
+```json
+{
+  "screen_date": "2026-07-06",
+  "screen_time": "18:00:00",
+  "strategy": {
+    "description": "沪深主板 + 非 ST + 收盘价<50 元 + 成交额前 5 名",
+    "max_price": 50,
+    "top_n": 5,
+    "exclude_growth_enterprise": true,
+    "exclude_star_market": true,
+    "exclude_st": true
+  },
+  "stats": {
+    "total": 5000,
+    "after_main_board": 3000,
+    "after_no_st": 2800,
+    "after_price": 1500,
+    "final": 5
+  },
+  "auto_screened": [
+    {"code": "600123", "name": "某某股份", "close": 25.5, "amount": 1.2e9, "source": "auto_screened"},
+    ...
+  ],
+  "base_pool": [
+    {"code": "600519", "source": "base_pool"},
+    ...
+  ],
+  "stocks": [...],  // 合并后的最终列表
+  "stock_codes": ["600123", "...", "600519", "..."],
+  "merged_count": 8,
+  "auto_count": 5,
+  "base_count": 3
+}
+```
+
+### 测试验证
+
+首次使用前，建议先手动测试筛选器：
+
+```bash
+# 本地测试（dry-run 模式，不保存文件）
+python3 scripts/stock_screener.py --dry-run
+
+# 带基础池测试
+BASE_STOCK_LIST="600519,000001" python3 scripts/stock_screener.py --dry-run
+
+# 自定义参数测试
+python3 scripts/stock_screener.py --max-price 30 --top-n 10 --dry-run
+```
+
+### Fallback 策略
+
+筛选器在以下情况会触发 fallback：
+
+1. **数据获取失败**：无法从数据源获取 A 股列表
+2. **筛选结果为空**：没有股票符合筛选条件
+
+Fallback 优先级：
+
+```
+1. 基础股票池（如果配置了 BASE_STOCK_LIST）
+2. 默认值 600519（如果基础池也未配置）
+```
+
+### 注意事项
+
+1. **交易时间**：筛选器在每个交易日 18:00 执行，使用当天的收盘数据
+2. **数据源**：依赖 AkShare 获取 A 股实时行情，确保网络可达
+3. **基础池维护**：基础股票池需要手动更新（通过 GitHub Secrets）
+4. **去重逻辑**：自动筛选的股票如果在基础池中存在，会优先使用自动筛选的结果（包含更多字段）
+5. **性能影响**：筛选过程约 5-10 秒，对整体分析时间影响很小
+
+### 扩展策略
+
+如果需要修改筛选策略，可以：
+
+1. **调整参数**：通过 `SCREENER_MAX_PRICE` 和 `SCREENER_TOP_N` 快速调整
+2. **修改代码**：编辑 `scripts/stock_screener.py` 中的筛选逻辑
+3. **自定义策略**：复制并修改筛选器脚本，创建自己的策略版本
+
+未来可能支持的筛选条件（待实现）：
+
+- 市值范围筛选
+- 市盈率/市净率筛选
+- 涨跌幅筛选
+- 换手率筛选
+- 技术指标筛选（如均线多头排列）
+
+---
 
 > **Longbridge 运行时行为：** 未配置凭据时不会实例化 Longbridge 这个可选 fetcher；若运行时遇到 `client is closed`、`context closed`、`connection closed` 等连接关闭类异常，会进入冷却期（默认 15 秒，可用 `LONGBRIDGE_CONNECTION_COOLDOWN_SECONDS` 调整），冷却期内美股/港股的实时与日线请求会自动跳过 Longbridge，退回 YFinance / AkShare 等兜底链路。
 
