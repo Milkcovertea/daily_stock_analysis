@@ -119,19 +119,22 @@ class StockScreener:
                         import time
                         time.sleep(retry_delay)
                         continue
-                    return None
+                    else:
+                        logger.error("所有尝试均失败：返回数据为空")
+                        return None
 
-                logger.info(f"✅ 成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
+                logger.info(f"成功获取 {len(df)} 只 A 股实时行情数据（第{attempt}次尝试）")
                 return df
 
             except Exception as e:
-                logger.warning(f"第{attempt}次尝试失败：{e}")
+                logger.warning(f"第{attempt}次尝试失败：{type(e).__name__} - {e}")
                 if attempt < max_retries:
                     logger.info(f"等待{retry_delay}秒后重试...")
                     import time
                     time.sleep(retry_delay)
                 else:
-                    logger.error(f"所有{max_retries}次尝试均失败，放弃获取")
+                    logger.error(f"所有{max_retries}次尝试均失败：{type(e).__name__} - {e}")
+                    logger.error("股票筛选失败，将触发Fallback机制")
                     return None
 
         return None
@@ -401,34 +404,34 @@ class StockScreener:
         }
 
     def _print_results(self, report: Dict[str, Any]):
-        """打印筛选结果"""
+        """打印筛选结果（兼容ASCII输出）"""
         is_fallback = report.get('fallback_reason') is not None
 
         print("\n" + "=" * 70)
         if is_fallback:
-            print("🔄 FALLBACK 模式 - 使用基础股票池")
+            print("[FALLBACK] 模式 - 使用基础股票池")
             print("=" * 70)
-            print(f"📅 日期：{report['screen_date']} {report['screen_time']}")
-            print(f"⚠️  原因：{report['fallback_reason']}")
+            print(f"日期：{report['screen_date']} {report['screen_time']}")
+            print(f"原因：{report['fallback_reason']}")
         else:
-            print("🎯 股票筛选结果")
+            print("股票筛选结果")
             print("=" * 70)
-            print(f"📅 筛选日期：{report['screen_date']} {report['screen_time']}")
-            print(f"📊 筛选策略：{report['strategy']['description']}")
+            print(f"筛选日期：{report['screen_date']} {report['screen_time']}")
+            print(f"筛选策略：{report['strategy']['description']}")
 
         print("-" * 70)
 
         if not is_fallback:
-            print("📈 筛选过程统计：")
+            print("筛选过程统计：")
             stats = report['stats']
             print(f"  - 初始股票数量：{stats['total']}只")
             print(f"  - 剔除创业板/科创板后：{stats['after_main_board']}只")
-            print(f"  - 剔除 ST 股票后：{stats['after_no_st']}只")
+            print(f"  - 剔除ST股票后：{stats['after_no_st']}只")
             print(f"  - 收盘价<{self.max_price}元后：{stats['after_price']}只")
             print(f"  - 最终自动筛选（成交额前{self.top_n}名）：{stats['final']}只")
             print("-" * 70)
 
-        print("📊 合并统计：")
+        print("合并统计：")
         print(f"  - 自动筛选：{report['auto_count']}只")
         print(f"  - 基础股票池：{report['base_count']}只")
         print(f"  - 合并后总计：{report['merged_count']}只")
@@ -437,11 +440,11 @@ class StockScreener:
         # 显示自动筛选的股票详情
         auto_stocks = report.get('auto_screened', [])
         if auto_stocks:
-            print("🏆 自动筛选股票详情：")
+            print("自动筛选股票详情：")
             for i, stock in enumerate(auto_stocks, 1):
                 print(f"\n  {i}. {stock['name']} ({stock['code']})")
-                print(f"     收盘价：¥{stock['close']:.2f}")
-                print(f"     成交额：¥{stock['amount']/1e8:.2f}亿")
+                print(f"     收盘价：{stock['close']:.2f}元")
+                print(f"     成交额：{stock['amount']/1e8:.2f}亿")
                 if stock.get('pct_chg', 0) != 0:
                     sign = "+" if stock['pct_chg'] > 0 else ""
                     print(f"     涨跌幅：{sign}{stock['pct_chg']:.2f}%")
@@ -451,12 +454,12 @@ class StockScreener:
         if report['base_count'] > 0:
             base_stocks = [s for s in report['stocks'] if s.get('source') == 'base_pool']
             if base_stocks:
-                print("📦 基础股票池（未重复）：")
+                print("基础股票池（未重复）：")
                 for i, stock in enumerate(base_stocks, 1):
                     print(f"  {i}. {stock['code']}")
                 print("-" * 70)
 
-        print(f"💾 最终股票列表（逗号分隔）：{','.join(report['stock_codes'])}")
+        print(f"最终股票列表（逗号分隔）：{','.join(report['stock_codes'])}")
         print("=" * 70)
 
 
@@ -563,7 +566,7 @@ def main():
 
             # 输出到 stdout（方便 GitHub Actions 捕获）
             if verbose:
-                print(f"\n📤 STOCK_LIST_OUTPUT={','.join(report['stock_codes'])}")
+                print(f"\nSTOCK_LIST_OUTPUT={','.join(report['stock_codes'])}")
 
     logger.info("筛选完成！")
     return 0
